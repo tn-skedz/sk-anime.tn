@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anime Stream</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    :root{color-scheme:dark}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,sans-serif;background:#0d0d0f;color:#e6e6e6}
+    header{display:flex;gap:.5rem;padding:1rem;border-bottom:1px solid #222}
+    header input{flex:1;padding:.6rem;background:#17171a;color:#eee;border:1px solid #2a2a2e;border-radius:6px}
+    header button{padding:.6rem 1rem;background:#2b6cb0;color:#fff;border:0;border-radius:6px;cursor:pointer}
+    main{max-width:1000px;margin:0 auto;padding:1rem}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.8rem}
+    .card{background:#151518;border-radius:8px;overflow:hidden;cursor:pointer;transition:.15s}
+    .card:hover{transform:translateY(-2px)}
+    .card img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block}
+    .card .t{padding:.5rem;font-size:.85rem;line-height:1.3}
+    .player-bar{display:flex;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap}
+    .player-bar select,.player-bar button{padding:.5rem;background:#17171a;color:#eee;border:1px solid #2a2a2e;border-radius:6px}
+    #video-wrap video{width:100%;aspect-ratio:16/9;background:#000;border-radius:8px}
+    .back{background:none;border:0;color:#2b6cb0;cursor:pointer;margin-bottom:.5rem;font-size:1rem}
+  </style>
+</head>
+<body>
+<header>
+  <input id="q" placeholder="Search anime... (e.g. Naruto)" />
+  <button id="go">Search</button>
+</header>
+<main>
+  <section id="results" class="grid"></section>
+  <section id="player" hidden>
+    <button class="back" id="back">← Back to Search</button>
+    <h2 id="title" style="margin:0 0 .5rem"></h2>
+    <div class="player-bar">
+      <select id="ep"></select>
+      <select id="sub"></select>
+      <button id="play">Play</button>
+    </div>
+    <div id="video-wrap"><video id="video" controls crossorigin="anonymous"></video></div>
+  </section>
+</main>
+<script>
+  const API = "/api";
+  const $ = s => document.querySelector(s);
+  let currentId = null;
+  let hls = null;
+
+  async function search(q) {
+    $("#results").innerHTML = "<p>Searching...</p>";
+    $("#player").hidden = true; $("#results").hidden = false;
+    const res = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (data.error) return $("#results").innerHTML = `<p>Error: ${data.error}</p>`;
+    
+    $("#results").innerHTML = data.results.map(a => `
+      <div class="card" data-id="${a.id}">
+        <img src="${a.image}" loading="lazy" />
+        <div class="t">${a.title}</div>
+      </div>`).join("");
+      
+    document.querySelectorAll(".card").forEach(el => {
+      el.onclick = () => loadAnime(el.dataset.id, el.querySelector(".t").innerText);
+    });
+  }
+
+  async function loadAnime(id, title) {
+    $("#results").hidden = true; $("#player").hidden = false;
+    $("#title").innerText = title;
+    $("#ep").innerHTML = "<option>Loading...</option>";
+    $("#sub").innerHTML = "<option>Auto</option>";
+    
+    const res = await fetch(`${API}/episodes?id=${id}`);
+    const data = await res.json();
+    if (data.error) return alert(data.error);
+
+    $("#ep").innerHTML = data.episodes.map((e, i) => `<option value="${e.id}">Ep ${e.number}</option>`).join("");
+    $("#video-wrap").innerHTML = ""; // Clear old video
+  }
+
+  async function play() {
+    const epId = $("#ep").value;
+    if (!epId) return;
+    $("#video-wrap").innerHTML = "<p>Loading stream...</p>";
+    
+    const res = await fetch(`${API}/watch?episodeId=${epId}`);
+    const data = await res.json();
+    if (data.error) return $("#video-wrap").innerHTML = `<p>Error: ${data.error}</p>`;
+
+    const source = data.sources.find(s => s.quality === "1080p") || data.sources[0];
+    const video = document.createElement("video");
+    video.controls = true; video.autoplay = true; video.crossOrigin = "anonymous";
+    $("#video-wrap").innerHTML = ""; $("#video-wrap").appendChild(video);
+
+    // Subtitles Dropdown
+    $("#sub").innerHTML = data.subtitles.length ? data.subtitles.map(s => `<option value="${s.url}">${s.lang}</option>`).join("") : "<option>No Subs</option>";
+    $("#sub").onchange = (e) => {
+      const tracks = video.textTracks;
+      for(let i=0; i<tracks.length; i++) tracks[i].mode = 'disabled';
+      const track = video.querySelector(`track[src="${e.target.value}"]`);
+      if(track) track.track.mode = 'showing';
+    };
+
+    // HLS Setup
+    if (hls) hls.destroy();
+    if (Hls.isSupported() && source.isM3U8) {
+      hls = new Hls();
+      hls.loadSource(source.url);
+      hls.attachMedia(video);
+    } else {
+      video.src = source.url;
+    }
+
+    // Add Subtitle Tracks to Video
+    data.subtitles.forEach(s => {
+      const track = document.createElement("track");
+      track.kind = "subtitles"; track.label = s.lang; track.src = s.url;
+      video.appendChild(track);
+    });
+  }
+
+  $("#go").onclick = () => search($("#q").value.trim());
+  $("#q").addEventListener("keydown", e => { if (e.key === "Enter") $("#go").click(); });
+  $("#back").onclick = () => { $("#player").hidden = true; $("#results").hidden = false; };
+  $("#play").onclick = play;
+</script>
+</body>
+</html>
